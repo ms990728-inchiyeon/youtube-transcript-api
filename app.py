@@ -1,5 +1,6 @@
 from flask import Flask, request, jsonify
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
 import re
 import os
 
@@ -43,41 +44,52 @@ def get_transcript():
                 'error': '올바른 YouTube URL 또는 video ID가 필요합니다'
             }), 400
         
-        # 자막 가져오기 (한국어 우선, 없으면 영어)
+        # 자막 가져오기 시도
         try:
+            # 방법 1: list_transcripts 사용
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
+            # 한국어 우선
             try:
                 transcript = transcript_list.find_transcript(['ko'])
                 language = 'ko'
             except:
+                # 영어 시도
                 try:
                     transcript = transcript_list.find_transcript(['en'])
                     language = 'en'
                 except:
+                    # 첫 번째 사용 가능한 자막
                     transcript = next(iter(transcript_list))
                     language = transcript.language_code
             
             segments = transcript.fetch()
-            full_text = ' '.join([item['text'] for item in segments])
             
-            return jsonify({
-                'success': True,
-                'video_id': video_id,
-                'language': language,
-                'transcript': full_text,
-                'segments': segments,
-                'word_count': len(full_text.split()),
-                'char_count': len(full_text),
-                'processed_by': 'n8n + Render.com'
-            })
-            
-        except Exception as e:
-            return jsonify({
-                'success': False,
-                'error': f'자막을 가져올 수 없습니다: {str(e)}'
-            }), 500
-    
+        except (TranscriptsDisabled, NoTranscriptFound):
+            # 방법 2: get_transcript 직접 사용
+            try:
+                segments = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko', 'en'])
+                language = 'ko'
+            except:
+                return jsonify({
+                    'success': False,
+                    'error': '이 영상은 자막이 없거나 비활성화되어 있습니다'
+                }), 404
+        
+        # 텍스트 추출
+        full_text = ' '.join([item['text'] for item in segments])
+        
+        return jsonify({
+            'success': True,
+            'video_id': video_id,
+            'language': language,
+            'transcript': full_text,
+            'segments': segments,
+            'word_count': len(full_text.split()),
+            'char_count': len(full_text),
+            'processed_by': 'n8n + Render.com'
+        })
+        
     except Exception as e:
         return jsonify({
             'success': False,
